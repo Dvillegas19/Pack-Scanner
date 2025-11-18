@@ -1,0 +1,261 @@
+<script>
+  import {onMount} from "svelte";
+  import {supabase} from "$lib/supabaseClient"; 
+  
+
+  let operarios=[];
+  let ordenes=[];
+  let consumibles=[];
+  let solicitudes=[];
+  let loading=true
+
+  onMount(async()=>{
+    loading=true;
+    await Promise.all([
+    fetchOperarios(),
+    fetchOrdenes(),
+    fetchConsumibles(),
+    fetchSolicitudes(),
+    ]);
+    loading=false;
+  });
+
+async function fetchOperarios() {
+  const {data,error}=await supabase
+  .from("usuario")
+  .select("id, nombre")
+
+  if (error){
+      console.error("Error cargando operarios:",error)
+  } else {
+      operarios=data
+  }
+}
+
+async function fetchSolicitudes() {
+    const {data,error}=await supabase
+    .from("solicitud_consumible")
+    .select("codigo_solicitud, orden_id, fecha_entrega, usuario(nombre)")
+  if(error){
+      console.error("Error cargando solicitudes:", error)
+  } else {
+    solicitudes=data.map((solicitud) =>(
+      {codigo: solicitud.codigo_solicitud,
+      orden_id: solicitud.orden_id,
+      operario: solicitud.usuario.nombre,
+      fecha: solicitud.fecha_entrega}
+    ));
+  }
+}
+
+async function fetchOrdenes() {
+    const {data,error}=await supabase
+    .from("orden_produccion")
+    .select("codigo_orden, fecha_emision")
+    if (error){
+     console.error("Error cargando ordenes:", error)
+    } else{
+    ordenes=data
+  }
+}
+
+async function fetchConsumibles(){
+    const {data,error}=await supabase
+    .from("consumible")
+    .select("codigo_barra, nombre, numero_bodega")
+  if (error){
+    console.error("Error cargando consumibles:", error)
+  } else{
+    consumibles=data
+  }
+}
+
+let selectedOperario='';
+let selectedOrden='';
+let selectedFecha=new Date().toISOString().split('T')[0];
+let filtroFecha='';
+let especificaciones=[];
+
+let selectConsumibles=[
+  {consumible_id:'',cantidad_requerida: 1}
+];
+
+function addConsumible(){
+  selectConsumibles=[...selectConsumibles,{consumible_id:'',cantidad_requerida: 1}];
+}
+
+function deleteConsumible(index){ 
+  selectConsumibles=selectConsumibles.filter((_,i)=> i !== index);
+}
+
+async function enviarSolicitud() {  
+  if(!selectedOperario||!selectedOrden||selectConsumibles.length==0){
+    alert ("Por favor complete todos los campos");
+    return;
+  }
+  const {data: solicitudData, error:solicitudError} = await supabase
+  .from("solicitud_consumible")
+  .insert({
+    orden_id:selectedOrden,
+    operario_id:selectedOperario,
+    fecha_entrega:selectedFecha
+  })
+  .select("codigo_solicitud")
+  .single();
+
+  if (solicitudError){
+    console.error("Error creando la solicitud:",solicitudError);
+    alert ("Error creando la solicitud");
+    return;
+  }
+  const nuevaSolicitudId=solicitudData.codigo_solicitud;
+  
+  const especificacionesConsumibles=selectConsumibles
+  .filter(consumibles=>consumibles.consumible_id && consumibles.cantidad_requerida>0)
+  .map(consumibles=>({
+    solicitud_id:nuevaSolicitudId,
+    consumible_id:consumibles.consumible_id,
+    cantidad_requerida:consumibles.cantidad_requerida,
+  }));
+  if (especificacionesConsumibles.length==0){
+    alert("Debes añadir al menos un consumible válido");
+    return;
+  }
+  const {error:especificacionesError}=await supabase
+  .from("especificacion")
+  .insert(especificacionesConsumibles);
+  if (especificacionesError){
+    console.error("Error insertando especificaciones:",especificacionesError);
+    alert ("Error guardando los consumibles de la solicitud")
+    return;
+  }
+  alert("¡Solicitud creada con éxito!")
+  selectedOperario="";
+  selectedOrden="";
+  selectConsumibles=[{consumible_id:'',cantidad_requerida:1}];
+  await fetchSolicitudes()
+}
+
+async function filtrarFecha(){
+  if(!filtroFecha){
+    alert("Debe poner una fecha para filtrar"); 
+    return;
+  }
+  loading=true;
+  const{data, error} =await supabase
+  .from("solicitud_consumible")
+  .select("codigo_solicitud, orden_id, fecha_entrega, usuario(nombre)")
+  .eq("fecha_entrega",filtroFecha)
+  if(error){
+    console.error("Error filtrando las solicitudes",error);
+  } else{
+    solicitudes=data.map((solicitud)=>({
+      codigo:solicitud.codigo_solicitud,
+      orden:solicitud.orden_id,
+      operario:solicitud.usuario.nombre,
+      fecha:solicitud.fecha_entrega
+    }));
+  }
+}
+async function limpiarFiltro() {
+  filtroFecha="";
+  loading=true;
+  await fetchSolicitudes();
+  loading=false;
+}
+
+async function verDetalle(codigo_solicitud){
+  const {data, error}= await supabase
+  .from("especificacion")
+  .select("*")
+  .eq("solicitud_id",codigo_solicitud)
+  if (error){
+    console.error("Error viendo detalles",error);
+  } else{
+      especificaciones=data;
+  }
+}
+
+
+
+
+</script>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Consumibles</title>
+    <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="header">
+      <div class="logo"><img src="/logo1.jpg" alt="Logo de la Empresa"></div>
+      <div class="title">Gestión de Consumibles</div>
+  </header>
+    <main class="container">
+      <div class="card">
+        <h2>Crear Nueva Solicitud</h2>
+        <div class="form-section">
+          <div class="form-row">
+            <div class="form-group">
+                <label for="operario">Operario que solicita</label>
+                <select id="operario">
+                    <option>Seleccione un operario...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="orden-produccion">Orden de Producción</label>
+                <select id="orden-produccion">
+                    <option>Seleccione una orden...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="fecha-entrega">Fecha de Entrega Requerida</label>
+                <div class="input-with-icon">
+                    <input type="date" id="fecha-entrega" placeholder="dd / mm / aaaa">
+                    <span class="icon-calendar ">📅</span>
+                </div>
+            </div>
+          </div>
+          <h3 class="consumibles-title">Consumibles Requeridos</h3>
+          <div class="consumibles-list">
+            <div class="consumible-row">
+              <div class="form-group consumable-select-group">
+                  <select>
+                      <option>Seleccione un consumible...</option>
+                  </select>
+              </div>
+              <div class="form-group consumable-cantidad-group">
+                  <input type="number" placeholder="Cantid:" min="1">
+              </div>
+              <button class="btn-remove">❌</button>
+            </div>
+            <div class="consumible-row">
+              <div class="form-group consumable-select-group">
+                  <select>
+                      <option>Seleccione un consumible...</option>
+                  </select>
+              </div>
+              <div class="form-group consumable-cantidad-group">
+                  <input type="number" placeholder="Cantid:" min="1">
+              </div>
+              <button class="btn-remove">❌</button>
+            </div>
+          </div>
+          <button class="btn-add">
+              + Añadir Consumible
+          </button>
+        </div>
+        <div class="submit-area">
+            <button class="btn-submit">
+                Enviar Solicitud
+            </button>
+        </div>
+      </div>
+    </main>
+</body>
+</html>
