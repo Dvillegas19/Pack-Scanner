@@ -1,7 +1,6 @@
 <script>
   import {onMount} from "svelte";
   import {supabase} from "$lib/supabaseClient"; 
-  
 
   let operarios=[];
   let ordenes=[];
@@ -177,8 +176,6 @@ async function verDetalle(codigo_solicitud){
 }
 
 
-
-
 </script>
 
 <!DOCTYPE html>
@@ -186,7 +183,7 @@ async function verDetalle(codigo_solicitud){
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestión de Consumibles</title>
+    <title>Gestión de Conbles</title>
     <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -216,7 +213,7 @@ async function verDetalle(codigo_solicitud){
             <div class="form-group">
                 <label for="fecha-entrega">Fecha de Entrega Requerida</label>
                 <div class="input-with-icon">
-                    <input type="date" id="fecha-entrega" placeholder="dd / mm / aaaa">
+                    <input type="date" id="fecha-entrega" placeholder="dd / mm / aaaa" bind:value={fechaRequeridaMostrar} on:focus={abrirSelector}>
                     <span class="icon-calendar ">📅</span>
                 </div>
             </div>
