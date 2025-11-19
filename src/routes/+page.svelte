@@ -1,33 +1,12 @@
 <script>
   import {onMount} from "svelte";
   import {supabase} from "$lib/supabaseClient"; 
-  
-  let fechaRequeridaMostrar = '';
+
   let operarios=[];
   let ordenes=[];
   let consumibles=[];
   let solicitudes=[];
   let loading=true
-
-  function formatToDDMMYYYY(dateString) {
-        if (!dateString) return '';
-        const [year, month, day] = dateString.split('-');
-        return `${day} / ${month} / ${year}`;
-    }
-  
-  function abrirSelector() {
-        const dateInput = document.getElementById('fecha-entrega');
-
-        if (dateInput) {
-            dateInput.type = 'date';
-            if (dateInput.showPicker) {
-                dateInput.showPicker();
-            } else {
-                // Si showPicker no es soportado, puedes enfocar el input.
-                dateInput.focus(); 
-            }
-        }
-    }
 
   onMount(async()=>{
     loading=true;
@@ -234,8 +213,8 @@ async function verDetalle(codigo_solicitud){
             <div class="form-group">
                 <label for="fecha-entrega">Fecha de Entrega Requerida</label>
                 <div class="input-with-icon">
-                    <input type="text" id="fecha-entrega" placeholder="dd / mm / aaaa" bind:value={fechaRequeridaMostrar} on:focus={abrirSelector}>
-                    <span class="icon-calendar calendar-trigger" on:click={abrirSelector}>📅</span>
+                    <input type="date" id="fecha-entrega" placeholder="dd / mm / aaaa" bind:value={fechaRequeridaMostrar} on:focus={abrirSelector}>
+                    <span class="icon-calendar ">📅</span>
                 </div>
             </div>
           </div>
