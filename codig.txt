@@ -176,7 +176,6 @@ async function verDetalle(codigo_solicitud){
 }
 
 
-</script>
 
 <!DOCTYPE html>
 <html lang="es">
