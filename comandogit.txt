@@ -1,4 +1,0 @@
-git init 
-git remote add origin https://github.com/santybarrera090/Proyecto-Pesa-Pack.git
-git checkout -b main  
-git push origin main --force      

@@ -6,33 +6,32 @@
   let ordenes = [];
   let consumibles = [];
   let solicitudes = [];
-  let loading = true;
+  let loading = false;
+  let hasSearched = false;
 
   let selectedOperario = '';
   let selectedOrden = '';
   let selectedFecha = new Date().toISOString().split('T')[0];
   
+  let tipoFiltro = 'fecha';
+  let filtroValor = '';
 
-  let tipoFiltro = 'fecha'; 
-  let filtroValor = '';     
+  let items = [{
+    consumible_id: '',
+    cantidad_requerida: 1,
+    searchText: '',
+    showSuggestions: false
+  }];
 
-  let items = [{ consumible_id: '', cantidad_requerida: 1 }];
-
-  let consumibleSearchTerm = '';
-  $: filteredConsumibles = getFilteredConsumibles(consumibleSearchTerm, consumibles);
-  
-  let editingId = null; 
+  let editingId = null;
   let showConfirmModal = false;
 
   onMount(async () => {
-    loading = true;
     await Promise.all([
       fetchOperarios(),
       fetchOrdenes(),
       fetchConsumibles(),
-      fetchSolicitudes(),
     ]);
-    loading = false;
   });
 
   async function fetchOperarios() {
@@ -41,57 +40,65 @@
     else operarios = data;
   }
 
-  async function fetchSolicitudes() {
-    const { data, error } = await supabase
-      .from('solicitud_consumible')
-      .select('codigo_solicitud, orden_id, fecha_entrega, operario_id, usuario ( nombre )');
-    if (error) {
-      console.error(error);
-    } else {
-      solicitudes = data.map((solicitud) => ({
-        codigo: solicitud.codigo_solicitud,
-        orden_id: solicitud.orden_id,
-        operario: solicitud.usuario.nombre,
-        operario_id: solicitud.operario_id,
-        fecha: solicitud.fecha_entrega,
-        expanded: false,
-        loadingDetails: false,
-        details: []
-      }));
-    }
-  }
-
   async function fetchOrdenes() {
-    const { data, error } = await supabase
-      .from('orden_produccion')
-      .select('codigo_orden, fecha_emision, estado');
+    const { data, error } = await supabase.from('orden_produccion').select('codigo_orden, fecha_emision, estado');
     if (error) console.error(error);
     else ordenes = data;
   }
 
   async function fetchConsumibles() {
-    const { data, error } = await supabase
-      .from('consumible')
-      .select('codigo_barra, nombre');
+    const { data, error } = await supabase.from('consumible').select('codigo_barra, nombre');
     if (error) console.error(error);
     else consumibles = data;
   }
 
   function addItem() {
-    items = [...items, { consumible_id: '', cantidad_requerida: 1 }];
+    items = [...items, {
+      consumible_id: '',
+      cantidad_requerida: 1,
+      searchText: '',
+      showSuggestions: false
+    }];
   }
 
   function removeItem(index) {
     items = items.filter((_, i) => i !== index);
   }
+
+  function getSuggestions(searchText) {
+    if (!searchText) return [];
+    const lower = searchText.toLowerCase();
+    return consumibles.filter(c =>
+      c.nombre.toLowerCase().includes(lower) ||
+      c.codigo_barra.toString().includes(lower)
+    );
+  }
+
+  function selectSuggestion(index, consumible) {
+    items[index].consumible_id = consumible.codigo_barra;
+    items[index].searchText = `${consumible.nombre} (Cód: ${consumible.codigo_barra})`;
+    items[index].showSuggestions = false;
+    items = items;
+  }
+
+  function handleSearchInput(index) {
+    items[index].consumible_id = '';
+    items[index].showSuggestions = true;
+    items = items;
+  }
   
+  function handleBlur(index) {
+    setTimeout(() => {
+      if (items[index]) items[index].showSuggestions = false;
+    }, 200);
+  }
+
   function resetForm() {
     selectedOperario = '';
     selectedOrden = '';
     selectedFecha = new Date().toISOString().split('T')[0];
-    items = [{ consumible_id: '', cantidad_requerida: 1 }];
+    items = [{ consumible_id: '', cantidad_requerida: 1, searchText: '', showSuggestions: false }];
     editingId = null;
-    consumibleSearchTerm = ''; 
     showConfirmModal = false;
   }
 
@@ -100,13 +107,11 @@
       alert('Por favor complete todos los campos de la solicitud.');
       return;
     }
-
     const validItems = items.filter(item => item.consumible_id && item.cantidad_requerida > 0);
     if (validItems.length === 0) {
-      alert('Debe añadir al menos un consumible válido.');
+      alert('Debe seleccionar al menos un consumible válido de la lista.');
       return;
     }
-
     showConfirmModal = true;
   }
 
@@ -119,80 +124,35 @@
       }));
 
     if (editingId) {
-      const { error: updateError } = await supabase
-        .from('solicitud_consumible')
-        .update({
-          orden_id: selectedOrden,
-          operario_id: selectedOperario,
-          fecha_entrega: selectedFecha,
-        })
+      const { error: uErr } = await supabase.from('solicitud_consumible')
+        .update({ orden_id: selectedOrden, operario_id: selectedOperario, fecha_entrega: selectedFecha })
         .eq('codigo_solicitud', editingId);
+      if (uErr) { alert('Error al actualizar.'); return; }
 
-      if (updateError) {
-        console.error(updateError);
-        alert('Error al actualizar.');
-        return;
-      }
+      await supabase.from('especificacion').delete().eq('solicitud_id', editingId);
+      const { error: iErr } = await supabase.from('especificacion')
+        .insert(especificacionItems.map(i => ({ ...i, solicitud_id: editingId })));
 
-      const { error: deleteError } = await supabase
-        .from('especificacion')
-        .delete()
-        .eq('solicitud_id', editingId);
-        
-      if (deleteError) console.error(deleteError);
-      
-      const { error: insertError } = await supabase
-        .from('especificacion')
-        .insert(especificacionItems.map(item => ({
-          ...item,
-          solicitud_id: editingId
-        })));
-        
-      if (insertError) {
-        console.error(insertError);
-        alert('Error al actualizar los consumibles.');
-        return;
-      }
-      
-      alert('¡Solicitud ACTUALIZADA con éxito!');
+      if (iErr) alert('Error al actualizar items.');
+      else alert('¡Solicitud ACTUALIZADA con éxito!');
 
     } else {
-      const { data: solicitudData, error: solicitudError } = await supabase
-        .from('solicitud_consumible')
-        .insert({
-          orden_id: selectedOrden,
-          operario_id: selectedOperario,
-          fecha_entrega: selectedFecha,
-        })
-        .select('codigo_solicitud')
-        .single();
+      const { data: sData, error: sErr } = await supabase.from('solicitud_consumible')
+        .insert({ orden_id: selectedOrden, operario_id: selectedOperario, fecha_entrega: selectedFecha })
+        .select('codigo_solicitud').single();
 
-      if (solicitudError) {
-        console.error(solicitudError);
-        alert('Error creando la solicitud.');
-        return;
-      }
+      if (sErr) { alert('Error creando solicitud.'); return; }
 
-      const nuevaSolicitudId = solicitudData.codigo_solicitud;
+      const { error: eErr } = await supabase.from('especificacion')
+        .insert(especificacionItems.map(i => ({ ...i, solicitud_id: sData.codigo_solicitud })));
 
-      const { error: especificacionError } = await supabase
-        .from('especificacion')
-        .insert(especificacionItems.map(item => ({
-          ...item,
-          solicitud_id: nuevaSolicitudId
-        })));
-
-      if (especificacionError) {
-        console.error(especificacionError);
-        alert('Error guardando los consumibles de la solicitud.');
-        return;
-      }
-
-      alert('¡Solicitud REGISTRADA con éxito!');
+      if (eErr) alert('Error guardando items.');
+      else alert('¡Solicitud REGISTRADA con éxito!');
     }
 
     resetForm();
-    await fetchSolicitudes();
+    solicitudes = [];
+    hasSearched = false;
   }
   
   async function handleEdit(solicitud) {
@@ -201,35 +161,36 @@
     selectedOrden = solicitud.orden_id;
     selectedFecha = solicitud.fecha;
     
-    if (solicitud.expanded) {
-      solicitud.expanded = false;
-    }
+    if (solicitud.expanded) solicitud.expanded = false;
     
     const { data, error } = await supabase
       .from('especificacion')
       .select('consumible_id, cantidad_requerida')
       .eq('solicitud_id', solicitud.codigo);
       
-    if (error) {
-      alert('Error al cargar los items para editar.');
-      items = [{ consumible_id: '', cantidad_requerida: 1 }];
+    if (!error && data) {
+      items = data.map(d => ({
+        consumible_id: d.consumible_id,
+        cantidad_requerida: d.cantidad_requerida,
+        searchText: getConsumibleName(d.consumible_id) + ` (Cód: ${d.consumible_id})`,
+        showSuggestions: false
+      }));
     } else {
-      items = data.length > 0 ? data : [{ consumible_id: '', cantidad_requerida: 1 }];
+      items = [{ consumible_id: '', cantidad_requerida: 1, searchText: '', showSuggestions: false }];
     }
     
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   
-  function cancelEdit() {
-    resetForm();
-  }
+  function cancelEdit() { resetForm(); }
 
   async function handleFilter() {
     if (!filtroValor) {
-      alert('Por favor seleccione un valor para filtrar.');
+      alert('Por favor seleccione un valor para buscar.');
       return;
     }
     loading = true;
+    hasSearched = true;
     
     let query = supabase
       .from('solicitud_consumible')
@@ -260,27 +221,14 @@
     loading = false;
   }
 
-  async function clearFilter() {
+  function clearFilter() {
     filtroValor = '';
-    loading = true;
-    await fetchSolicitudes();
-    loading = false;
-  }
-  
-  function getFilteredConsumibles(searchTerm, list) {
-    if (!searchTerm) {
-      return list;
-    }
-    const lowerSearch = searchTerm.toLowerCase();
-    return list.filter(c => 
-      c.nombre.toLowerCase().includes(lowerSearch) || 
-      c.codigo_barra.toString().includes(searchTerm)
-    );
+    solicitudes = [];
+    hasSearched = false;
   }
   
   async function toggleDetalles(clickedSolicitud) {
     if (editingId) return;
-    
     clickedSolicitud.expanded = !clickedSolicitud.expanded;
 
     if (clickedSolicitud.expanded && clickedSolicitud.details.length === 0) {
@@ -290,12 +238,9 @@
         .select(`cantidad_requerida, consumible ( nombre, codigo_barra )`)
         .eq('solicitud_id', clickedSolicitud.codigo);
 
-      if (error) {
-        console.error(error);
-        clickedSolicitud.expanded = false;
-      } else {
-        clickedSolicitud.details = data;
-      }
+      if (!error) clickedSolicitud.details = data;
+      else clickedSolicitud.expanded = false;
+      
       clickedSolicitud.loadingDetails = false;
     }
     solicitudes = [...solicitudes];
@@ -310,7 +255,6 @@
     return cons ? cons.nombre : codigo;
   }
 </script>
-
 
 <header>
   <div class="logo">
@@ -358,25 +302,32 @@
 
       <fieldset class="consumibles-list">
         <legend>Consumibles Requeridos</legend>
-        
-        <input 
-          type="search" 
-          class="consumible-search" 
-          placeholder="Buscar consumible por nombre o código..."
-          bind:value={consumibleSearchTerm}
-        />
 
         {#each items as item, index (index)}
           <div class="consumible-item">
-            <select bind:value={item.consumible_id} required>
-              <option value="" disabled>Seleccione un consumible...</option>
-              {#each filteredConsumibles as cons}
-                <option value={cons.codigo_barra}>{cons.nombre} (Cód: {cons.codigo_barra})</option>
-              {/each}
-              {#if filteredConsumibles.length === 0 && consumibleSearchTerm}
-                <option disabled>No se encontraron consumibles</option>
+            
+            <div class="autocomplete-container">
+              <input
+                type="text"
+                placeholder="Buscar y seleccionar consumible..."
+                bind:value={item.searchText}
+                on:input={() => handleSearchInput(index)}
+                on:blur={() => handleBlur(index)}
+                required
+              />
+              
+              {#if item.showSuggestions && item.searchText.length > 0}
+                <ul class="suggestions-list">
+                  {#each getSuggestions(item.searchText) as suggestion}
+                    <li on:mousedown={() => selectSuggestion(index, suggestion)}>
+                      {suggestion.nombre} <small>(Cód: {suggestion.codigo_barra})</small>
+                    </li>
+                  {:else}
+                    <li class="no-results">No se encontraron resultados</li>
+                  {/each}
+                </ul>
               {/if}
-            </select>
+            </div>
             
             <input
               type="number"
@@ -384,6 +335,7 @@
               placeholder="Cant."
               min="1"
               required
+              class="input-cantidad"
             />
             
             <button type="button" class="btn-remove" on:click={() => removeItem(index)}>
@@ -401,7 +353,6 @@
         <button type="submit" class="btn-submit">
           {editingId ? 'Revisar y Actualizar' : 'Revisar y Enviar'}
         </button>
-        
         {#if editingId}
           <button type="button" class="btn-cancel" on:click={cancelEdit}>
             Cancelar Edición
@@ -440,7 +391,7 @@
 
       <div class="filter-buttons">
         <button type="button" class="btn-filter" on:click={handleFilter}>
-          Filtrar
+          Buscar
         </button>
         <button type="button" class="btn-clear" on:click={clearFilter}>
           Limpiar
@@ -448,536 +399,211 @@
       </div>
     </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Cód. Solicitud</th>
-          <th>Orden Producción</th>
-          <th>Operario</th>
-          <th>Fecha Entrega</th>
-          <th>Acciones</th>
-        </tr>
-      </thead>
-      
-      {#if loading}
-        <tbody>
-          <tr><td colspan="5">Cargando datos desde Supabase...</td></tr>
-        </tbody>
-      {:else}
-        {#each solicitudes as solicitud (solicitud.codigo)}
-          <tbody class="solicitud-group">
-            <tr>
-              <td>{solicitud.codigo}</td>
-              <td>{solicitud.orden_id}</td>
-              <td>{solicitud.operario}</td>
-              <td>{solicitud.fecha}</td>
-              
-              <td class="action-buttons">
-                <button 
-                  type="button" 
-                  class="btn-details" 
-                  on:click={() => toggleDetalles(solicitud)}
-                  disabled={editingId}
-                >
-                  {solicitud.expanded ? 'Ocultar' : 'Ver Detalles'}
-                </button>
-                <button 
-                  type="button" 
-                  class="btn-edit" 
-                  on:click={() => handleEdit(solicitud)}
-                  disabled={editingId === solicitud.codigo}
-                >
-                  Editar
-                </button>
-              </td>
-            </tr>
-
-            {#if solicitud.expanded}
-              <tr class="detalle-row">
-                <td colspan="5">
-                  <div class="detalle-contenido">
-                    {#if solicitud.loadingDetails}
-                      <p>Cargando detalles...</p>
-                    {:else if solicitud.details.length === 0}
-                      <p>Esta solicitud no tiene consumibles registrados.</p>
-                    {:else}
-                      <h5>Consumibles Solicitados:</h5>
-                      <ul class="detalle-lista">
-                        {#each solicitud.details as item}
-                          <li>
-                            <span class="item-nombre">{item.consumible.nombre} (Cód: {item.consumible.codigo_barra})</span>
-                            <span class="item-cantidad">Cantidad: {item.cantidad_requerida}</span>
-                          </li>
-                        {/each}
-                      </ul>
-                    {/if}
-                  </div>
+    {#if !hasSearched}
+      <div class="empty-state">
+        <p>Utilice los filtros de arriba para buscar solicitudes registradas.</p>
+      </div>
+    {:else}
+      <table>
+        <thead>
+          <tr>
+            <th>Cód. Solicitud</th>
+            <th>Orden Producción</th>
+            <th>Operario</th>
+            <th>Fecha Entrega</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        
+        {#if loading}
+          <tbody><tr><td colspan="5">Cargando datos...</td></tr></tbody>
+        {:else if solicitudes.length === 0}
+          <tbody><tr><td colspan="5">No se encontraron solicitudes con ese filtro.</td></tr></tbody>
+        {:else}
+          {#each solicitudes as solicitud (solicitud.codigo)}
+            <tbody class="solicitud-group">
+              <tr>
+                <td>{solicitud.codigo}</td>
+                <td>{solicitud.orden_id}</td>
+                <td>{solicitud.operario}</td>
+                <td>{solicitud.fecha}</td>
+                <td class="action-buttons">
+                  <button type="button" class="btn-details" on:click={() => toggleDetalles(solicitud)} disabled={editingId}>
+                    {solicitud.expanded ? 'Ocultar' : 'Ver Detalles'}
+                  </button>
+                  <button type="button" class="btn-edit" on:click={() => handleEdit(solicitud)} disabled={editingId === solicitud.codigo}>
+                    Editar
+                  </button>
                 </td>
               </tr>
-            {/if}
-          </tbody>
-        {/each}
-      {/if}
-    </table>
+              {#if solicitud.expanded}
+                <tr class="detalle-row">
+                  <td colspan="5">
+                    <div class="detalle-contenido">
+                      {#if solicitud.loadingDetails}
+                        <p>Cargando detalles...</p>
+                      {:else if solicitud.details.length === 0}
+                        <p>Sin consumibles registrados.</p>
+                      {:else}
+                        <h5>Consumibles Solicitados:</h5>
+                        <ul class="detalle-lista">
+                          {#each solicitud.details as item}
+                            <li>
+                              <span class="item-nombre">{item.consumible.nombre} (Cód: {item.consumible.codigo_barra})</span>
+                              <span class="item-cantidad">Cantidad: {item.cantidad_requerida}</span>
+                            </li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
+                  </td>
+                </tr>
+              {/if}
+            </tbody>
+          {/each}
+        {/if}
+      </table>
+    {/if}
   </section>
 
   {#if showConfirmModal}
     <div class="modal-backdrop">
       <div class="modal-content">
         <h3>Confirmación de Solicitud</h3>
-        <p>Por favor, verifique los datos antes de guardar.</p>
-        
+        <p>Verifique los datos antes de guardar.</p>
         <div class="confirm-details">
           <p><strong>Operario:</strong> {getOperarioName(selectedOperario)}</p>
           <p><strong>Orden:</strong> {selectedOrden}</p>
-          <p><strong>Fecha Entrega:</strong> {selectedFecha}</p>
+          <p><strong>Fecha:</strong> {selectedFecha}</p>
         </div>
-
-        <h4>Items Solicitados:</h4>
+        <h4>Items:</h4>
         <ul class="confirm-items-list">
           {#each items as item}
-            {#if item.consumible_id && item.cantidad_requerida > 0}
+            {#if item.consumible_id}
               <li>
-                <span>{getConsumibleName(item.consumible_id)}</span>
+                <span>{items.find(i => i === item).searchText}</span>
                 <strong>x{item.cantidad_requerida}</strong>
               </li>
             {/if}
           {/each}
         </ul>
-
         <div class="modal-actions">
           <button class="btn-cancel" on:click={() => showConfirmModal = false}>Volver</button>
-          <button class="btn-submit" on:click={confirmAndSubmit}>Confirmar y Guardar</button>
+          <button class="btn-submit" on:click={confirmAndSubmit}>Confirmar</button>
         </div>
       </div>
     </div>
   {/if}
 </main>
+
 <style>
-    :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-        Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  :global(body) {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
     background-color: #f0f2f5;
     color: #333;
     margin: 0;
     line-height: 1.6;
-    }
+  }
+  main { max-width: 1400px; margin: 2rem auto; padding: 0 1rem; }
+  .card { background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); padding: 1.5rem 2rem; margin-bottom: 2rem; }
+  h1, h2, h3, h4 { font-weight: 600; color: #343a40; }
+  h3 { margin-top: 0; }
 
-    main {
-    max-width: 1400px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-    }
-
-    .card {
-    background-color: #ffffff;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-    padding: 1.5rem 2rem;
-    margin-bottom: 2rem;
-    }
-
-    h1, h2, h3, h4 { font-weight: 600; color: #343a40; }
-    h3 { margin-top: 0; }
-
-    header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background-color: #0076a3;
-    color: white;
-    padding: 0.8rem 2rem;
+  header {
+    display: flex; justify-content: space-between; align-items: center;
+    background-color: #0076a3; color: white; padding: 0.8rem 2rem;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-    }
-    header h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    text-align: center;
-    flex-grow: 1;
-    color: white;
-    }
-    .logo {
-    flex-basis: 200px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    }
-    .logo img {
-    height: 40px;
-    width: auto;
-    display: block;
-    }
-    .spacer {
-    flex-basis: 200px;
-    }
+  }
+  header h1 { margin: 0; font-size: 1.5rem; flex-grow: 1; color: white; text-align: center; }
+  .logo { flex-basis: 200px; display: flex; align-items: center; }
+  .logo img { height: 40px; width: auto; display: block; }
+  .spacer { flex-basis: 200px; }
 
-    .form-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 1.5rem;
-    }
-
-    label {
-    display: block;
-    font-weight: 500;
-    margin-bottom: 0.5rem;
-    font-size: 0.9rem;
-    color: #555;
-    }
-
-    input[type='number'],
-    input[type='date'],
-    input[type='search'],
-    select {
-    width: 100%;
-    padding: 0.75rem;
-    font-size: 1rem;
-    border: 1px solid #ced4da;
-    border-radius: 6px;
-    box-sizing: border-box; 
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; }
+  label { display: block; font-weight: 500; margin-bottom: 0.5rem; font-size: 0.9rem; color: #555; }
+  input, select {
+    width: 100%; padding: 0.75rem; font-size: 1rem; border: 1px solid #ced4da; border-radius: 6px; box-sizing: border-box;
     transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
-    }
+  }
+  input:focus, select:focus { border-color: #3498db; outline: 0; box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.25); }
 
-    input:focus, select:focus {
-    border-color: #3498db;
-    outline: 0;
-    box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.25);
-    }
+  .consumibles-list { border: 1px solid #e0e0e0; border-radius: 6px; padding: 1rem; margin-top: 2rem; }
+  .consumible-item { display: flex; gap: 1rem; align-items: flex-start; margin-bottom: 1rem; position: relative; }
 
-    .consumible-search {
-    margin-bottom: 1.5rem;
-    }
+  .autocomplete-container { flex-grow: 1; position: relative; }
+  .suggestions-list {
+    position: absolute; top: 100%; left: 0; right: 0;
+    background: white; border: 1px solid #ced4da; border-radius: 0 0 6px 6px;
+    max-height: 200px; overflow-y: auto; z-index: 100;
+    list-style: none; padding: 0; margin: 0; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  }
+  .suggestions-list li { padding: 0.75rem; cursor: pointer; border-bottom: 1px solid #f0f0f0; }
+  .suggestions-list li:hover { background-color: #f1f1f1; }
+  .suggestions-list li small { color: #666; margin-left: 0.5rem; }
+  .no-results { padding: 0.75rem; color: #888; font-style: italic; }
 
-    .consumibles-list {
-    border: 1px solid #e0e0e0;
-    border-radius: 6px;
-    padding: 1rem;
-    margin-top: 2rem;
-    }
-    .consumibles-list legend {
-    font-weight: 600;
-    padding: 0 0.5rem;
-    color: #343a40;
-    }
-    .consumible-item {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    margin-bottom: 1rem;
-    }
-    .consumible-item select {
-    flex-grow: 1;
-    }
-    .consumible-item input {
-    flex-basis: 100px;
-    }
+  .input-cantidad { flex-basis: 100px; width: 100px; }
 
-    button {
-    font-size: 1rem;
-    padding: 0.7rem 1.2rem;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: 500;
-    transition: all 0.2s ease;
-    white-space: nowrap; 
-    }
-    button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    }
+  button { font-size: 1rem; padding: 0.7rem 1.2rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-remove { background-color: #dc3545; color: white; font-size: 1.2rem; padding: 0.5rem 0.9rem; height: 46px;}
+  .btn-add { background-color: #27ae60; color: white; }
+  .btn-submit { background-color: #0076a3; color: white; font-size: 1.1rem; padding: 0.8rem 1.5rem; flex-grow: 1; }
+  .btn-cancel { background-color: #7f8c8d; color: white; }
+  .form-actions { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
 
-    .btn-remove {
-    background-color: #dc3545;
-    color: white;
-    font-size: 1.2rem;
-    padding: 0.5rem 0.9rem;
-    }
-    .btn-remove:hover { background-color: #c82333; }
+  .filter-bar { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.5rem; padding: 1rem; background-color: #ecf0f1; border-radius: 6px; flex-wrap: wrap; }
+  .filter-group { display: flex; align-items: center; gap: 0.5rem; }
+  .filter-input-wrapper { flex-grow: 1; }
+  .filter-buttons { display: flex; gap: 0.5rem; }
+  .btn-filter { background-color: #7f8c8d; color: white; }
+  .btn-clear { background-color: #e67e22; color: white; }
+  .empty-state { text-align: center; padding: 2rem; color: #666; font-style: italic; border: 2px dashed #ddd; border-radius: 8px; }
 
-    .btn-add {
-    background-color: #27ae60;
-    color: white;
-    }
-    .btn-add:hover { background-color: #219150; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { padding: 0.9rem 1rem; text-align: left; border-bottom: 1px solid #e0e0e0; }
+  thead { background-color: #f8f9fa; }
+  .solicitud-group tr:first-child:hover { background-color: #f1f1f1; }
 
-    .form-actions {
-    display: flex;
-    gap: 1rem;
-    margin-top: 1rem;
-    flex-wrap: wrap; 
-    }
+  .action-buttons { display: flex; gap: 0.5rem; }
+  .btn-details { background: none; border: 1px solid #3498db; color: #3498db; padding: 0.4rem 0.8rem; font-size: 0.9rem; }
+  .btn-edit { background: none; border: 1px solid #e67e22; color: #e67e22; padding: 0.4rem 0.8rem; font-size: 0.9rem; }
 
-    .btn-submit {
-    background-color: #0076a3; 
-    color: white;
-    font-size: 1.1rem;
-    padding: 0.8rem 1.5rem;
-    flex-grow: 1; 
-    }
-    .btn-submit:hover { background-color: #005f82; } 
+  .detalle-row td { background-color: #fdfdfd; padding: 0; }
+  .detalle-contenido { padding: 1rem 1.5rem 1.5rem 2.5rem; }
+  .detalle-lista { list-style: none; padding-left: 0; margin: 0; }
+  .detalle-lista li { display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0; }
 
-    .btn-cancel {
-    background-color: #7f8c8d;
-    color: white;
-    }
-    .btn-cancel:hover { background-color: #5a6268; }
+  .modal-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 1000; padding: 1rem; }
+  .modal-content { background: white; padding: 2rem; border-radius: 8px; width: 100%; max-width: 500px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-height: 90vh; overflow-y: auto; }
+  .confirm-details { background: #f8f9fa; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; }
+  .confirm-items-list { list-style: none; padding: 0; border-top: 1px solid #eee; }
+  .confirm-items-list li { display: flex; justify-content: space-between; padding: 0.8rem 0; border-bottom: 1px solid #eee; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 2rem; }
 
-    .filter-bar {
-    display: flex;
-    gap: 1rem;
-    align-items: center;
-    margin-bottom: 1.5rem;
-    padding: 1rem;
-    background-color: #ecf0f1;
-    border-radius: 6px;
-    flex-wrap: wrap; 
-    }
-    .filter-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    }
-    .filter-input-wrapper {
-    flex-grow: 1;
-    }
-    .filter-buttons {
-    display: flex;
-    gap: 0.5rem;
-    }
-
-    .btn-filter {
-    background-color: #7f8c8d;
-    color: white;
-    }
-    .btn-filter:hover { background-color: #626f70; }
-    .btn-clear {
-    background-color: #e67e22; 
-    color: white;
-    }
-    .btn-clear:hover { background-color: #d35400; }
-
-    table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 1rem;
-    }
-    th, td {
-    padding: 0.9rem 1rem;
-    text-align: left;
-    border-bottom: 1px solid #e0e0e0;
-    }
-    thead { background-color: #f8f9fa; }
-    th {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: #555;
-    }
-    .solicitud-group tr:first-child:hover {
-    background-color: #f1f1f1;
-    }
-    td[colspan='5'] {
-    text-align: center;
-    color: #777;
-    font-style: italic;
-    }
-
-    .action-buttons {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap; 
-    }
-    .btn-details {
-    background: none;
-    border: 1px solid #3498db;
-    color: #3498db;
-    font-size: 0.9rem;
-    padding: 0.4rem 0.8rem;
-    }
-    .btn-details:hover {
-    background-color: #3498db;
-    color: white;
-    }
-
-    .btn-edit {
-    background: none;
-    border: 1px solid #e67e22;
-    color: #e67e22;
-    font-size: 0.9rem;
-    padding: 0.4rem 0.8rem;
-    }
-    .btn-edit:hover {
-    background-color: #e67e22;
-    color: white;
-    }
-
-    .detalle-row td {
-    background-color: #fdfdfd;
-    padding: 0; 
-    }
-    .detalle-contenido {
-    padding: 1rem 1.5rem 1.5rem 2.5rem;
-    }
-    .detalle-contenido h5 {
-    margin-top: 0;
-    margin-bottom: 0.75rem;
-    font-weight: 600;
-    color: #343a40;
-    }
-    .detalle-contenido p {
-    margin: 0;
-    color: #555;
-    }
-    .detalle-lista {
-    list-style: none;
-    padding-left: 0;
-    margin: 0;
-    }
-    .detalle-lista li {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #f0f0f0;
-    }
-    .detalle-lista li:last-child {
-    border-bottom: none;
-    }
-    .item-nombre { font-weight: 500; }
-    .item-cantidad { color: #333; }
-    .solicitud-group:last-child tr:last-child td {
-    border-bottom: 1px solid #e0e0e0;
-    }
-
-    .modal-backdrop {
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 1000;
-    padding: 1rem;
-    }
-    .modal-content {
-    background: white;
-    padding: 2rem;
-    border-radius: 8px;
-    width: 100%;
-    max-width: 500px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    max-height: 90vh;
-    overflow-y: auto;
-    }
-    .confirm-details {
-    background: #f8f9fa;
-    padding: 1rem;
-    border-radius: 6px;
-    margin-bottom: 1rem;
-    }
-    .confirm-details p { margin: 0.5rem 0; }
-    .confirm-items-list {
-    list-style: none;
-    padding: 0;
-    border-top: 1px solid #eee;
-    }
-    .confirm-items-list li {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.8rem 0;
-    border-bottom: 1px solid #eee;
-    }
-    .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 1rem;
-    margin-top: 2rem;
-    }
-
-    @media (max-width: 768px) {
-    header {
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 0.8rem 1rem;
-    }
-    header h1 {
-        font-size: 1.3rem;
-        margin-top: 0.5rem;
-        text-align: left;
-        flex-grow: 0;
-    }
-    .logo, .spacer {
-        flex-basis: auto;
-        width: 100%;
-        justify-content: flex-start;
-    }
-    .logo img { height: 35px; }
+  @media (max-width: 768px) {
+    header { flex-direction: column; align-items: flex-start; padding: 0.8rem 1rem; }
+    header h1 { font-size: 1.3rem; margin-top: 0.5rem; text-align: left; }
+    .logo, .spacer { flex-basis: auto; width: 100%; }
     .spacer { display: none; }
-
-    main { margin: 1rem auto; padding: 0 0.5rem; }
-    .card { padding: 1rem; }
     .form-grid { grid-template-columns: 1fr; gap: 1rem; }
-
-    .consumible-item {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0.5rem;
-        padding: 1rem;
-        background: #f8f9fa;
-        border-radius: 6px;
-    }
-    .consumible-item select, .consumible-item input {
-        width: 100%; 
-        flex-basis: auto;
-        margin-bottom: 0.5rem;
-    }
-    .consumible-item button { width: 100%; }
-
-    .filter-bar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0.8rem;
-        padding: 0.8rem;
-    }
-    .filter-bar input, .filter-bar button, .filter-bar select { width: 100%; }
-    .filter-buttons { width: 100%; justify-content: space-between; }
+    .consumible-item { flex-direction: column; align-items: stretch; gap: 0.5rem; padding: 1rem; background: #f8f9fa; border-radius: 6px; }
+    .autocomplete-container, .input-cantidad { width: 100%; flex-basis: auto; }
+    .filter-bar { flex-direction: column; align-items: stretch; }
+    .filter-buttons { justify-content: space-between; }
     .filter-buttons button { width: 48%; }
-
+    .modal-actions { flex-direction: column-reverse; }
+    .modal-actions button { width: 100%; }
+    
     table, thead, tbody, th, td, tr { display: block; }
     thead tr { position: absolute; top: -9999px; left: -9999px; }
     tr { border: 1px solid #dee2e6; margin-bottom: 0.75rem; border-radius: 6px; }
-    td {
-        border: none;
-        position: relative;
-        padding-left: 50%;
-        text-align: right;
-        border-bottom: 1px dashed #dee2e6;
-    }
-    td:last-child { border-bottom: none; }
-    td:before {
-        position: absolute;
-        top: 0.9rem;
-        left: 1rem;
-        width: 45%;
-        padding-right: 10px;
-        white-space: nowrap;
-        text-align: left;
-        font-weight: 600;
-        color: #495057;
-    }
+    td { border: none; position: relative; padding-left: 50%; text-align: right; border-bottom: 1px dashed #dee2e6; }
+    td:before { position: absolute; top: 0.9rem; left: 1rem; width: 45%; text-align: left; font-weight: 600; color: #495057; }
     td:nth-of-type(1):before { content: "Cód. Solicitud:"; }
     td:nth-of-type(2):before { content: "Orden Producción:"; }
     td:nth-of-type(3):before { content: "Operario:"; }
     td:nth-of-type(4):before { content: "Fecha Entrega:"; }
     td:nth-of-type(5):before { content: "Acciones:"; }
-
-    .action-buttons { flex-direction: column; align-items: stretch; }
-    .action-buttons button { width: 100%; margin-top: 0.5rem; }
-    .detalle-contenido { padding: 0.8rem 1rem 1rem 1rem; }
-    .detalle-lista li { flex-direction: column; align-items: flex-start; }
-    .item-cantidad { margin-top: 0.2rem; font-size: 0.9rem; }
-
-    .modal-actions { flex-direction: column-reverse; }
-    .modal-actions button { width: 100%; }
-    }
+  }
 </style>
-
