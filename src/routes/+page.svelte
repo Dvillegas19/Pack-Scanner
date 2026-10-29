@@ -39,7 +39,6 @@
   let showConfirmPasswordField = false;
   let passwordError = '';
   
-  // Regex para validar contraseña: mayúscula, minúscula, número, 8-24 caracteres
   const passwordRegex = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d).{8,24}$/;
 
   onMount(async () => {
@@ -75,19 +74,16 @@
   async function handleChangePassword() {
     passwordError = '';
     
-    // Validar que los campos no estén vacíos
     if (!newPassword || !confirmPassword) {
       passwordError = 'Por favor completa todos los campos.';
       return;
     }
 
-    // Validar que las contraseñas coincidan
     if (newPassword !== confirmPassword) {
       passwordError = 'Las contraseñas no coinciden.';
       return;
     }
 
-    // Validar el formato de la contraseña
     if (!passwordRegex.test(newPassword)) {
       passwordError = 'La contraseña debe contener: mayúscula, minúscula, número y tener entre 8 y 24 caracteres.';
       return;
@@ -128,15 +124,14 @@
     const consumibleEncontrado = consumibles.find(c => c.codigo_barra.toString() === decodedText);
     
     if (consumibleEncontrado) {
-        // Validación Anti-Duplicados en Escáner
         const yaExiste = items.some(i => i.consumible_id === consumibleEncontrado.codigo_barra);
         
         if (yaExiste) {
-            alert(`⚠️ El ítem "${consumibleEncontrado.nombre}" YA ESTÁ en la lista.\n\nPor favor, aumente la cantidad manualmente.`);
+            alert(`El ítem "${consumibleEncontrado.nombre}" YA ESTÁ en la lista.\n\nPor favor, aumente la cantidad manualmente.`);
             return;
         }
 
-        const confirmar = confirm(`Item Encontrado:\n📦 ${consumibleEncontrado.nombre}\n📍 ${consumibleEncontrado.bodega || 'Central'}\n\n¿Agregar?`);
+        const confirmar = confirm(`Item Encontrado:\n ${consumibleEncontrado.nombre}\n ${consumibleEncontrado.bodega || 'Central'}\n\n¿Agregar?`);
         if (confirmar) {
             const lastIdx = items.length - 1;
             if (items[lastIdx].consumible_id === '') { selectSuggestion(lastIdx, consumibleEncontrado); } 
@@ -160,19 +155,16 @@
   }
 
   function selectSuggestion(index, consumible) {
-    // --- LÓGICA ANTI-DUPLICADOS (TU PEDIDO) ---
     const yaExiste = items.some((item, i) => i !== index && item.consumible_id === consumible.codigo_barra);
 
     if (yaExiste) {
-        alert(`⚠️ ATENCIÓN:\nEl ítem "${consumible.nombre}" ya está en la lista.\n\nPor favor, busque la fila existente y aumente la cantidad.`);
+        alert(`ATENCIÓN:\nEl ítem "${consumible.nombre}" ya está en la lista.\n\nPor favor, busque la fila existente y aumente la cantidad.`);
         
-        // Limpiamos el intento actual para no dejar el duplicado
         items[index].searchText = '';
         items[index].consumible_id = '';
         items[index].showSuggestions = false;
         return; 
     }
-    // ------------------------------------------
 
     items[index].consumible_id = consumible.codigo_barra;
     items[index].searchText = `${consumible.nombre} (Cód: ${consumible.codigo_barra})`;
