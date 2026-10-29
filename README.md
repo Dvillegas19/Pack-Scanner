@@ -7,6 +7,8 @@
 
 **Pack Scanner** es una plataforma web desarrollada para la administración eficiente y la trazabilidad operativa en plantas de empaque. Permite la gestión centralizada de operarios, el seguimiento de órdenes de producción, el control de consumibles en tiempo real y la lectura rápida de insumos mediante códigos QR.
 
+**Link del Vercel Desplegado**: https://packscanner.vercel.app/login
+**Nota**: La base de datos puede no estar activa al momento de ejecutarlo, contactar a los desarolladores si quieren inicializar la app
 ---
 
 ## 🚀 Características Principales
@@ -49,7 +51,3 @@ Pack-Scanner/
 └── package.json
 npm run build
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://kit.svelte.dev/docs/adapters) for your target environment.
